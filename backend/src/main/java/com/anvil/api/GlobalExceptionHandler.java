@@ -7,6 +7,7 @@ import com.anvil.auth.InvalidRefreshTokenException;
 import com.anvil.auth.RateLimitExceededException;
 import com.anvil.job.domain.InvalidJobTransitionException;
 import com.anvil.job.service.JobNotFoundException;
+import com.anvil.scheduler.InvalidCronExpressionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
@@ -60,6 +61,11 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(InvalidJobTransitionException.class)
     public ResponseEntity<Map<String, Object>> handleInvalidJobTransition(InvalidJobTransitionException ex) {
         return buildResponse(HttpStatus.CONFLICT, "INVALID_JOB_TRANSITION", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidCronExpressionException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidCron(InvalidCronExpressionException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "INVALID_CRON_EXPRESSION", ex.getMessage());
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)

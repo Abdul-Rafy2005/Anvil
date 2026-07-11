@@ -93,7 +93,7 @@ class WorkerIntegrationTest {
     @Test
     @Order(1)
     void jobCreation_writesOutboxEntry() {
-        CreateJobRequest req = new CreateJobRequest("REPORT_GENERATION", "{}", JobPriority.MEDIUM);
+        CreateJobRequest req = new CreateJobRequest("REPORT_GENERATION", "{}", JobPriority.MEDIUM, null, null);
         var response = jobService.createJob(req, testUserId, null);
 
         List<OutboxEntry> retryable = outboxRepository.findRetryableEntries();

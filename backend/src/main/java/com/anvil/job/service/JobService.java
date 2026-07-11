@@ -9,6 +9,7 @@ import com.anvil.job.repository.IdempotencyKeyRepository;
 import com.anvil.job.repository.JobRepository;
 import com.anvil.queue.OutboxEntry;
 import com.anvil.queue.OutboxEntryRepository;
+import com.anvil.scheduler.CronSchedulerHelper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.domain.Page;
@@ -16,6 +17,7 @@ import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.util.UUID;
 
 @Service
@@ -27,15 +29,18 @@ public class JobService {
     private final IdempotencyKeyRepository idempotencyKeyRepository;
     private final OutboxEntryRepository outboxRepository;
     private final JobStateMachine stateMachine;
+    private final CronSchedulerHelper cronHelper;
 
     public JobService(JobRepository jobRepository,
                       IdempotencyKeyRepository idempotencyKeyRepository,
                       OutboxEntryRepository outboxRepository,
-                      JobStateMachine stateMachine) {
+                      JobStateMachine stateMachine,
+                      CronSchedulerHelper cronHelper) {
         this.jobRepository = jobRepository;
         this.idempotencyKeyRepository = idempotencyKeyRepository;
         this.outboxRepository = outboxRepository;
         this.stateMachine = stateMachine;
+        this.cronHelper = cronHelper;
     }
 
     @Transactional
@@ -50,22 +55,45 @@ public class JobService {
             }
         }
 
+        boolean hasScheduledAt = request.scheduledAt() != null;
+        boolean hasCron = request.cronExpression() != null && !request.cronExpression().isBlank();
+
+        if (hasScheduledAt && hasCron) {
+            throw new IllegalArgumentException("scheduledAt and cronExpression are mutually exclusive");
+        }
+
         Job job = new Job(userId, request.jobType(), request.payload(), JobStatus.CREATED);
         if (request.priority() != null) {
             job.setPriority(request.priority());
         }
 
-        job = jobRepository.save(job);
-        stateMachine.transition(job, JobStatus.QUEUED, userId, "Job created");
-        job = jobRepository.save(job);
-
-        outboxRepository.save(new OutboxEntry(job.getId(), job.getPriority()));
+        if (hasScheduledAt) {
+            if (request.scheduledAt().isBefore(Instant.now())) {
+                throw new IllegalArgumentException("scheduledAt must be in the future");
+            }
+            job.setScheduledAt(request.scheduledAt());
+            job.setNextFireAt(request.scheduledAt());
+            job = jobRepository.save(job);
+            log.info("Job scheduled: id={} type={} user={} fireAt={}", job.getId(), job.getJobType(), userId, request.scheduledAt());
+        } else if (hasCron) {
+            cronHelper.validate(request.cronExpression());
+            job.setCronExpression(request.cronExpression());
+            Instant firstFireAt = cronHelper.getNextFireTime(request.cronExpression(), Instant.now());
+            job.setNextFireAt(firstFireAt);
+            job = jobRepository.save(job);
+            log.info("Cron job created: id={} type={} user={} cron={} nextFire={}", job.getId(), job.getJobType(), userId, request.cronExpression(), firstFireAt);
+        } else {
+            job = jobRepository.save(job);
+            stateMachine.transition(job, JobStatus.QUEUED, userId, "Job created");
+            job = jobRepository.save(job);
+            outboxRepository.save(new OutboxEntry(job.getId(), job.getPriority()));
+            log.info("Job created: id={} type={} user={}", job.getId(), job.getJobType(), userId);
+        }
 
         if (idempotencyKey != null) {
             idempotencyKeyRepository.save(new IdempotencyKey(idempotencyKey, userId, job.getId()));
         }
 
-        log.info("Job created: id={} type={} user={}", job.getId(), job.getJobType(), userId);
         return toResponse(job);
     }
 
@@ -120,6 +148,7 @@ public class JobService {
                 job.getStatus(), job.getPriority(), job.getProgressPct(),
                 job.getProgressMessage(), job.getResult(), job.getErrorMessage(),
                 job.getAttemptCount(), job.getMaxRetries(),
+                job.getScheduledAt(), job.getCronExpression(), job.getNextFireAt(),
                 job.getCreatedAt(), job.getUpdatedAt(),
                 job.getStartedAt(), job.getCompletedAt());
     }

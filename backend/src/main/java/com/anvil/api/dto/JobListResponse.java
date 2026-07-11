@@ -12,11 +12,15 @@ public record JobListResponse(
     JobStatus status,
     JobPriority priority,
     Integer progressPct,
+    Instant scheduledAt,
+    String cronExpression,
     Instant createdAt
 ) {
     public static JobListResponse from(Job job) {
         return new JobListResponse(
                 job.getId(), job.getJobType(), job.getStatus(),
-                job.getPriority(), job.getProgressPct(), job.getCreatedAt());
+                job.getPriority(), job.getProgressPct(),
+                job.getScheduledAt(), job.getCronExpression(),
+                job.getCreatedAt());
     }
 }

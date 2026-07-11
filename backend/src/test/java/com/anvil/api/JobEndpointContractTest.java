@@ -67,7 +67,7 @@ class JobEndpointContractTest {
     void createJob_validRequest_returns201() throws Exception {
         JobResponse response = new JobResponse(jobId, userId, "REPORT_GENERATION", "{}",
                 JobStatus.QUEUED, JobPriority.MEDIUM, null, null, null, null,
-                0, 4, Instant.now(), Instant.now(), null, null);
+                0, 4, null, null, null, Instant.now(), Instant.now(), null, null);
         when(jobService.createJob(any(CreateJobRequest.class), eq(userId), any()))
                 .thenReturn(response);
 
@@ -77,7 +77,7 @@ class JobEndpointContractTest {
                                 .jwt(j -> j.subject(userId.toString())))
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
-                                new CreateJobRequest("REPORT_GENERATION", "{}", null))))
+                                new CreateJobRequest("REPORT_GENERATION", "{}", null, null, null))))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value(jobId.toString()))
                 .andExpect(jsonPath("$.status").value("QUEUED"))
@@ -88,7 +88,7 @@ class JobEndpointContractTest {
     void createJob_withIdempotencyKey_returnsSameJob() throws Exception {
         JobResponse response = new JobResponse(jobId, userId, "REPORT_GENERATION", "{}",
                 JobStatus.QUEUED, JobPriority.MEDIUM, null, null, null, null,
-                0, 4, Instant.now(), Instant.now(), null, null);
+                0, 4, null, null, null, Instant.now(), Instant.now(), null, null);
         when(jobService.createJob(any(CreateJobRequest.class), eq(userId), eq("idem-123")))
                 .thenReturn(response);
 
@@ -99,7 +99,7 @@ class JobEndpointContractTest {
                         .header("Idempotency-Key", "idem-123")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
-                                new CreateJobRequest("REPORT_GENERATION", "{}", null))))
+                                new CreateJobRequest("REPORT_GENERATION", "{}", null, null, null))))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value(jobId.toString()));
     }
@@ -109,7 +109,7 @@ class JobEndpointContractTest {
         mockMvc.perform(post("/api/v1/jobs")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(
-                                new CreateJobRequest("REPORT_GENERATION", "{}", null))))
+                                new CreateJobRequest("REPORT_GENERATION", "{}", null, null, null))))
                 .andExpect(status().isUnauthorized());
     }
 
@@ -117,7 +117,7 @@ class JobEndpointContractTest {
     void listJobs_userSeesOwnJobs() throws Exception {
         UUID otherUserId = UUID.randomUUID();
         JobListResponse ownJob = new JobListResponse(jobId, "REPORT_GENERATION",
-                JobStatus.QUEUED, JobPriority.MEDIUM, null, Instant.now());
+                JobStatus.QUEUED, JobPriority.MEDIUM, null, null, null, Instant.now());
         when(jobService.listJobs(eq(userId), eq(false), isNull(), isNull(), any()))
                 .thenReturn(new PageImpl<>(List.of(ownJob)));
 
@@ -132,7 +132,7 @@ class JobEndpointContractTest {
     @Test
     void listJobs_adminSeesAllJobs() throws Exception {
         JobListResponse job = new JobListResponse(jobId, "REPORT_GENERATION",
-                JobStatus.QUEUED, JobPriority.MEDIUM, null, Instant.now());
+                JobStatus.QUEUED, JobPriority.MEDIUM, null, null, null, Instant.now());
         when(jobService.listJobs(eq(userId), eq(true), isNull(), isNull(), any()))
                 .thenReturn(new PageImpl<>(List.of(job)));
 
@@ -147,7 +147,7 @@ class JobEndpointContractTest {
     void getJob_found_returns200() throws Exception {
         JobResponse response = new JobResponse(jobId, userId, "REPORT_GENERATION", "{}",
                 JobStatus.QUEUED, JobPriority.MEDIUM, null, null, null, null,
-                0, 4, Instant.now(), Instant.now(), null, null);
+                0, 4, null, null, null, Instant.now(), Instant.now(), null, null);
         when(jobService.getJob(eq(jobId), eq(userId), eq(false))).thenReturn(response);
 
         mockMvc.perform(get("/api/v1/jobs/" + jobId)
@@ -175,7 +175,7 @@ class JobEndpointContractTest {
     void cancelJob_queuedJob_returns200() throws Exception {
         JobResponse response = new JobResponse(jobId, userId, "REPORT_GENERATION", "{}",
                 JobStatus.CANCELLED, JobPriority.MEDIUM, null, null, null, null,
-                0, 4, Instant.now(), Instant.now(), null, null);
+                0, 4, null, null, null, Instant.now(), Instant.now(), null, null);
         when(jobService.cancelJob(eq(jobId), eq(userId), eq(false))).thenReturn(response);
 
         mockMvc.perform(post("/api/v1/jobs/" + jobId + "/cancel")
@@ -197,5 +197,75 @@ class JobEndpointContractTest {
                                 .jwt(j -> j.subject(userId.toString()))))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("INVALID_JOB_TRANSITION"));
+    }
+
+    @Test
+    void createJob_withScheduledAt_returns201_statusCreated() throws Exception {
+        Instant futureTime = Instant.now().plusSeconds(300);
+        JobResponse response = new JobResponse(jobId, userId, "ALWAYS_FAIL", "{}",
+                JobStatus.CREATED, JobPriority.MEDIUM, null, null, null, null,
+                0, 4, futureTime, null, futureTime, Instant.now(), Instant.now(), null, null);
+        when(jobService.createJob(any(CreateJobRequest.class), eq(userId), any()))
+                .thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/jobs")
+                        .with(SecurityMockMvcRequestPostProcessors.jwt()
+                                .authorities(new SimpleGrantedAuthority("ROLE_USER"))
+                                .jwt(j -> j.subject(userId.toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"jobType\":\"ALWAYS_FAIL\",\"payload\":\"{}\",\"scheduledAt\":\"" + futureTime + "\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("CREATED"))
+                .andExpect(jsonPath("$.scheduledAt").exists())
+                .andExpect(jsonPath("$.nextFireAt").exists());
+    }
+
+    @Test
+    void createJob_withCronExpression_returns201_statusCreated() throws Exception {
+        Instant nextFire = Instant.now().plusSeconds(30);
+        JobResponse response = new JobResponse(jobId, userId, "ALWAYS_FAIL", "{}",
+                JobStatus.CREATED, JobPriority.MEDIUM, null, null, null, null,
+                0, 4, null, "0/30 * * * * ?", nextFire, Instant.now(), Instant.now(), null, null);
+        when(jobService.createJob(any(CreateJobRequest.class), eq(userId), any()))
+                .thenReturn(response);
+
+        mockMvc.perform(post("/api/v1/jobs")
+                        .with(SecurityMockMvcRequestPostProcessors.jwt()
+                                .authorities(new SimpleGrantedAuthority("ROLE_USER"))
+                                .jwt(j -> j.subject(userId.toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"jobType\":\"ALWAYS_FAIL\",\"payload\":\"{}\",\"cronExpression\":\"0/30 * * * * ?\"}"))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("CREATED"))
+                .andExpect(jsonPath("$.cronExpression").value("0/30 * * * * ?"))
+                .andExpect(jsonPath("$.nextFireAt").exists());
+    }
+
+    @Test
+    void createJob_invalidCron_returns400() throws Exception {
+        when(jobService.createJob(any(CreateJobRequest.class), eq(userId), any()))
+                .thenThrow(new com.anvil.scheduler.InvalidCronExpressionException("bad-cron", "parse error"));
+
+        mockMvc.perform(post("/api/v1/jobs")
+                        .with(SecurityMockMvcRequestPostProcessors.jwt()
+                                .authorities(new SimpleGrantedAuthority("ROLE_USER"))
+                                .jwt(j -> j.subject(userId.toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"jobType\":\"ALWAYS_FAIL\",\"payload\":\"{}\",\"cronExpression\":\"bad-cron\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_CRON_EXPRESSION"));
+    }
+
+    @Test
+    void createJob_bothScheduledAtAndCron_returns400() throws Exception {
+        String futureTime = Instant.now().plusSeconds(300).toString();
+        mockMvc.perform(post("/api/v1/jobs")
+                        .with(SecurityMockMvcRequestPostProcessors.jwt()
+                                .authorities(new SimpleGrantedAuthority("ROLE_USER"))
+                                .jwt(j -> j.subject(userId.toString())))
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"jobType\":\"ALWAYS_FAIL\",\"payload\":\"{}\",\"scheduledAt\":\"" + futureTime + "\",\"cronExpression\":\"0/30 * * * * ?\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
     }
 }

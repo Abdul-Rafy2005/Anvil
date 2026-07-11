@@ -29,4 +29,12 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
 
     @Query("SELECT j FROM Job j WHERE j.status = 'RETRYING' AND j.nextRetryAt IS NOT NULL AND j.nextRetryAt <= :now")
     List<Job> findRetryingJobsDue(@Param("now") Instant now);
+
+    @Query(value = "SELECT * FROM jobs WHERE status = 'CREATED' AND scheduled_at IS NOT NULL AND scheduled_at <= :now LIMIT :limit FOR UPDATE SKIP LOCKED",
+           nativeQuery = true)
+    List<Job> findDueScheduledJobs(@Param("now") Instant now, @Param("limit") int limit);
+
+    @Query(value = "SELECT * FROM jobs WHERE status = 'CREATED' AND cron_expression IS NOT NULL AND next_fire_at IS NOT NULL AND next_fire_at <= :now LIMIT :limit FOR UPDATE SKIP LOCKED",
+           nativeQuery = true)
+    List<Job> findDueCronJobs(@Param("now") Instant now, @Param("limit") int limit);
 }

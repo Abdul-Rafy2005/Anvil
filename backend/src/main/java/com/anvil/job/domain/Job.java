@@ -80,6 +80,9 @@ public class Job {
     @Column(name = "next_retry_at")
     private Instant nextRetryAt;
 
+    @Column(name = "next_fire_at")
+    private Instant nextFireAt;
+
     @PrePersist
     protected void onCreate() {
         this.createdAt = Instant.now();
@@ -138,4 +141,6 @@ public class Job {
     public void setTimeoutAt(Instant timeoutAt) { this.timeoutAt = timeoutAt; }
     public Instant getNextRetryAt() { return nextRetryAt; }
     public void setNextRetryAt(Instant nextRetryAt) { this.nextRetryAt = nextRetryAt; }
+    public Instant getNextFireAt() { return nextFireAt; }
+    public void setNextFireAt(Instant nextFireAt) { this.nextFireAt = nextFireAt; }
 }
