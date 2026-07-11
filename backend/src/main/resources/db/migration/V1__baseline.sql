@@ -1,0 +1,2 @@
+-- Anvil baseline migration
+-- This is an empty baseline. Subsequent migrations will add tables.

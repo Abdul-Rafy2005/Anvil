@@ -1,4 +1,4 @@
-package com.abdulrafy.anvil;
+package com.anvil;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;
