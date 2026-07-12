@@ -1,6 +1,7 @@
 package com.anvil.worker;
 
 import com.anvil.admin.DeadLetterService;
+import com.anvil.config.MetricsService;
 import com.anvil.job.domain.*;
 import com.anvil.job.handler.*;
 import com.anvil.job.repository.JobAttemptRepository;
@@ -8,6 +9,7 @@ import com.anvil.job.repository.JobRepository;
 import com.anvil.queue.AnvilQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -19,6 +21,8 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 @Component
 public class WorkerRunner {
@@ -33,7 +37,9 @@ public class WorkerRunner {
     private final JobHandlerRegistry handlerRegistry;
     private final DeadLetterService deadLetterService;
     private final SimpMessagingTemplate messagingTemplate;
+    private final MetricsService metricsService;
     private final long[] retryBackoffSeconds;
+    private final AtomicBoolean running = new AtomicBoolean(true);
 
     @Value("${worker.id:default}")
     private String workerId;
@@ -49,6 +55,7 @@ public class WorkerRunner {
                         JobHandlerRegistry handlerRegistry,
                         DeadLetterService deadLetterService,
                         SimpMessagingTemplate messagingTemplate,
+                        MetricsService metricsService,
                         @Value("${worker.retry-backoff-seconds:30,60,120,240}") String retryBackoffCsv) {
         this.queue = queue;
         this.jobRepository = jobRepository;
@@ -58,6 +65,7 @@ public class WorkerRunner {
         this.handlerRegistry = handlerRegistry;
         this.deadLetterService = deadLetterService;
         this.messagingTemplate = messagingTemplate;
+        this.metricsService = metricsService;
         this.retryBackoffSeconds = parseBackoff(retryBackoffCsv);
     }
 
@@ -73,6 +81,11 @@ public class WorkerRunner {
     @Scheduled(fixedDelayString = "${worker.poll-interval-ms:2000}",
                initialDelayString = "${worker.poll-interval-ms:2000}")
     public void poll() {
+        if (!running.get()) {
+            log.debug("Worker {} shutting down, skipping poll", workerId);
+            return;
+        }
+
         Worker self = getOrCreateWorker();
         if (self.getStatus() == WorkerStatus.PAUSED) {
             log.debug("Worker {} is paused, skipping poll", workerId);
@@ -83,8 +96,19 @@ public class WorkerRunner {
         if (claim.isEmpty()) return;
 
         UUID jobId = claim.get().jobId();
+        MDC.put("jobId", jobId.toString());
+        MDC.put("workerId", workerId);
         log.info("Worker {} claimed job={}", workerId, jobId);
 
+        try {
+            processClaimedJob(jobId, self);
+        } finally {
+            MDC.remove("jobId");
+            MDC.remove("workerId");
+        }
+    }
+
+    private void processClaimedJob(UUID jobId, Worker self) {
         Optional<Job> jobOpt = jobRepository.findById(jobId);
         if (jobOpt.isEmpty()) {
             log.warn("Claimed job={} not in DB, acking to clear queue", jobId);
@@ -133,6 +157,7 @@ public class WorkerRunner {
 
         log.info("Worker {} executing job={} type={} attempt={}", workerId, jobId, job.getJobType(), job.getAttemptCount());
 
+        long execStart = System.nanoTime();
         try {
             JobExecutionContext ctx = new JobExecutionContextImpl(job, job.getAttemptCount(), jobRepository, messagingTemplate);
             Object result = executeHandler(handler, job.getPayload(), ctx);
@@ -160,14 +185,20 @@ public class WorkerRunner {
             attemptRepository.save(attempt);
 
             queue.ack(jobId);
+            metricsService.recordJobCompleted();
+            metricsService.recordExecutionTime(System.nanoTime() - execStart, TimeUnit.NANOSECONDS);
             log.info("Worker {} completed job={}", workerId, jobId);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             log.warn("Worker {} interrupted during job={}", workerId, jobId);
+            metricsService.recordJobFailed();
+            metricsService.recordExecutionTime(System.nanoTime() - execStart, TimeUnit.NANOSECONDS);
             handleTransientFailure(job, attempt, workerUuid, "Worker interrupted", e);
             queue.nack(jobId);
         } catch (Exception e) {
             log.error("Worker {} failed on job={}", workerId, jobId, e);
+            metricsService.recordJobFailed();
+            metricsService.recordExecutionTime(System.nanoTime() - execStart, TimeUnit.NANOSECONDS);
             handleTransientFailure(job, attempt, workerUuid, e.getMessage(), e);
             queue.nack(jobId);
         } finally {
@@ -198,6 +229,7 @@ public class WorkerRunner {
                 job.setCompletedAt(Instant.now());
                 jobRepository.save(job);
                 deadLetterService.createEntry(job, "Max retries exhausted after " + job.getAttemptCount() + " attempts");
+                metricsService.recordJobDlq();
             } else {
                 stateMachine.transition(job, JobStatus.RETRYING, workerUuid);
                 int retryIndex = Math.min(job.getAttemptCount(), retryBackoffSeconds.length - 1);
@@ -253,9 +285,19 @@ public class WorkerRunner {
 
     @Scheduled(fixedDelayString = "${worker.heartbeat-interval-ms:10000}", initialDelay = 2000)
     public void heartbeat() {
+        if (!running.get()) return;
         Worker worker = getOrCreateWorker();
         worker.setLastHeartbeatAt(Instant.now());
         workerRepository.save(worker);
+    }
+
+    public void shutdown() {
+        log.info("Worker {} shutdown requested, finishing current job...", workerId);
+        running.set(false);
+    }
+
+    public boolean isRunning() {
+        return running.get();
     }
 
     private Worker getOrCreateWorker() {

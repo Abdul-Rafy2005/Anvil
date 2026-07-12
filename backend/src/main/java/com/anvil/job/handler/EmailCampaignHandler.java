@@ -6,6 +6,13 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+/**
+ * EMAIL_CAMPAIGN handler.
+ *
+ * <p><b>Idempotency warning:</b> This handler is NOT idempotent. A real implementation
+ * sending emails would double-send on crash-retry. Production implementations must
+ * use an idempotency key (e.g. campaign_id + batch_number) to prevent duplicate sends.
+ */
 @Component
 public class EmailCampaignHandler implements JobHandler<String, String> {
 

@@ -10,6 +10,7 @@ import com.anvil.queue.OutboxEntry;
 import com.anvil.queue.OutboxEntryRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -40,6 +41,7 @@ public class RetryScheduler {
     public void processRetryingJobs() {
         List<Job> dueJobs = jobRepository.findRetryingJobsDue(Instant.now());
         for (Job job : dueJobs) {
+            MDC.put("jobId", job.getId().toString());
             try {
                 stateMachine.transition(job, JobStatus.QUEUED, job.getUserId(), "Retry scheduler: re-enqueueing");
                 job.setNextRetryAt(null);
@@ -52,6 +54,8 @@ public class RetryScheduler {
                         job.getId(), job.getAttemptCount(), job.getMaxRetries());
             } catch (Exception e) {
                 log.error("Retry scheduler: failed to re-enqueue job={}: {}", job.getId(), e.getMessage());
+            } finally {
+                MDC.remove("jobId");
             }
         }
     }

@@ -268,4 +268,18 @@ class JobEndpointContractTest {
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"));
     }
+
+    @Test
+    void listJobs_invalidStatus_returns400() throws Exception {
+        when(jobService.listJobs(eq(userId), eq(false), eq("NOT_A_REAL_STATUS"), isNull(), any()))
+                .thenThrow(new IllegalArgumentException("No enum constant com.anvil.job.domain.JobStatus.NOT_A_REAL_STATUS"));
+
+        mockMvc.perform(get("/api/v1/jobs")
+                        .param("status", "NOT_A_REAL_STATUS")
+                        .with(SecurityMockMvcRequestPostProcessors.jwt()
+                                .authorities(new SimpleGrantedAuthority("ROLE_USER"))
+                                .jwt(j -> j.subject(userId.toString()))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error.code").value("INVALID_ARGUMENT"));
+    }
 }

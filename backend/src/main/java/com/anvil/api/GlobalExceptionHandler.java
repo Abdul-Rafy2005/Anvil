@@ -10,6 +10,7 @@ import com.anvil.job.service.JobNotFoundException;
 import com.anvil.scheduler.InvalidCronExpressionException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.InvalidDataAccessApiUsageException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -75,6 +76,20 @@ public class GlobalExceptionHandler {
                 .reduce((a, b) -> a + "; " + b)
                 .orElse("Validation failed");
         return buildResponse(HttpStatus.BAD_REQUEST, "VALIDATION_ERROR", message);
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ResponseEntity<Map<String, Object>> handleIllegalArgument(IllegalArgumentException ex) {
+        return buildResponse(HttpStatus.BAD_REQUEST, "INVALID_ARGUMENT", ex.getMessage());
+    }
+
+    @ExceptionHandler(InvalidDataAccessApiUsageException.class)
+    public ResponseEntity<Map<String, Object>> handleInvalidDataAccess(InvalidDataAccessApiUsageException ex) {
+        String message = ex.getMessage();
+        if (message != null && message.contains("No enum constant")) {
+            return buildResponse(HttpStatus.BAD_REQUEST, "INVALID_ARGUMENT", message);
+        }
+        return buildResponse(HttpStatus.BAD_REQUEST, "INVALID_ARGUMENT", message);
     }
 
     @ExceptionHandler(Exception.class)

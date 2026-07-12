@@ -6,6 +6,8 @@ import com.anvil.job.domain.JobStatus;
 import com.anvil.job.domain.JobStateMachine;
 import com.anvil.job.repository.JobRepository;
 import com.anvil.queue.AnvilQueue;
+import com.anvil.queue.RedisQueue;
+import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -25,6 +27,7 @@ public class WorkerWatchdog {
     private final WorkerRepository workerRepository;
     private final JobRepository jobRepository;
     private final AnvilQueue queue;
+    private final RedisQueue redisQueue;
     private final JobStateMachine stateMachine;
     private final DeadLetterService deadLetterService;
     private final long[] retryBackoffSeconds;
@@ -35,12 +38,14 @@ public class WorkerWatchdog {
     public WorkerWatchdog(WorkerRepository workerRepository,
                           JobRepository jobRepository,
                           AnvilQueue queue,
+                          RedisQueue redisQueue,
                           JobStateMachine stateMachine,
                           DeadLetterService deadLetterService,
                           @Value("${worker.retry-backoff-seconds:30,60,120,240}") String retryBackoffCsv) {
         this.workerRepository = workerRepository;
         this.jobRepository = jobRepository;
         this.queue = queue;
+        this.redisQueue = redisQueue;
         this.stateMachine = stateMachine;
         this.deadLetterService = deadLetterService;
         this.retryBackoffSeconds = parseBackoff(retryBackoffCsv);
@@ -53,6 +58,20 @@ public class WorkerWatchdog {
             result[i] = Long.parseLong(parts[i].trim());
         }
         return result;
+    }
+
+    @PostConstruct
+    @Transactional
+    public void reEnqueueLostJobs() {
+        List<Job> queuedJobs = jobRepository.findByStatus(JobStatus.QUEUED);
+        int reEnqueued = 0;
+        for (Job job : queuedJobs) {
+            queue.enqueue(job.getId(), job.getPriority());
+            reEnqueued++;
+        }
+        if (reEnqueued > 0) {
+            log.info("Startup recovery: re-enqueued {} QUEUED jobs lost from Redis", reEnqueued);
+        }
     }
 
     @Scheduled(fixedDelayString = "${watchdog.interval-ms:15000}", initialDelay = 5000)
@@ -90,6 +109,37 @@ public class WorkerWatchdog {
         for (Job job : timedOutJobs) {
             log.warn("Job={} timed out (timeoutAt={}), force-failing", job.getId(), job.getTimeoutAt());
             failAndRetryJob(job, "Job execution timed out after " + job.getTimeoutSeconds() + " seconds");
+        }
+    }
+
+    @Scheduled(fixedDelayString = "${watchdog.interval-ms:15000}", initialDelay = 10000)
+    @Transactional
+    public void reclaimOrphanedJobs() {
+        List<Job> runningJobs = jobRepository.findByStatus(JobStatus.RUNNING);
+        for (Job job : runningJobs) {
+            if (!redisQueue.isClaimed(job.getId())) {
+                log.warn("Job={} orphaned (RUNNING but not in Redis claimed set), reclaiming", job.getId());
+                try {
+                    UUID actor = job.getUserId();
+                    stateMachine.transition(job, JobStatus.FAILED, actor, "Worker crashed mid-job");
+                    job.setErrorMessage("Worker crashed mid-job, job orphaned");
+
+                    if (job.getAttemptCount() >= job.getMaxRetries()) {
+                        log.warn("Job={} exhausted retries, marking FAILED_PERMANENTLY", job.getId());
+                        stateMachine.transition(job, JobStatus.FAILED_PERMANENTLY, actor, "Exhausted retries after worker crash");
+                        job.setCompletedAt(Instant.now());
+                        jobRepository.save(job);
+                        deadLetterService.createEntry(job, "Worker crashed, retries exhausted");
+                    } else {
+                        stateMachine.transition(job, JobStatus.RETRYING, actor, "Re-enqueueing after worker crash");
+                        job.setNextRetryAt(Instant.now());
+                        jobRepository.save(job);
+                        log.info("Job={} scheduled for immediate retry after worker crash", job.getId());
+                    }
+                } catch (Exception e) {
+                    log.error("Failed to reclaim orphaned job={}: {}", job.getId(), e.getMessage());
+                }
+            }
         }
     }
 

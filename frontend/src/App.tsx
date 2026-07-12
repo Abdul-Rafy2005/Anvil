@@ -1,34 +1,64 @@
-function App() {
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider, useAuth } from './contexts/AuthContext'
+import { Layout } from './components/Layout'
+import { AdminRoute } from './components/AdminRoute'
+import { Login } from './pages/Login'
+import { Register } from './pages/Register'
+import { JobList } from './pages/JobList'
+import { CreateJob } from './pages/CreateJob'
+import { JobDetail } from './pages/JobDetail'
+import { AdminOverview } from './pages/admin/Overview'
+import { Workers } from './pages/admin/Workers'
+import { Dlq } from './pages/admin/Dlq'
+import { AuditLog } from './pages/admin/AuditLog'
+import type { ReactNode } from 'react'
+
+function ProtectedRoute({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) {
+    return (
+      <Layout>
+        <div className="flex items-center justify-center py-20">
+          <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-300 rounded-full animate-spin" />
+        </div>
+      </Layout>
+    )
+  }
+  if (!user) return <Navigate to="/login" replace />
+  return <Layout>{children}</Layout>
+}
+
+function PublicRoute({ children }: { children: ReactNode }) {
+  const { user, loading } = useAuth()
+  if (loading) return null
+  if (user) return <Navigate to="/jobs" replace />
+  return <>{children}</>
+}
+
+function AppRoutes() {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex items-center justify-center">
-      <div className="text-center space-y-6 max-w-lg px-6">
-        <div className="inline-flex items-center gap-2 text-sm font-medium text-zinc-400 bg-zinc-900 border border-zinc-800 rounded-full px-4 py-1.5">
-          <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-          System Online
-        </div>
-        <h1 className="text-5xl font-semibold tracking-tight text-white">
-          Anvil
-        </h1>
-        <p className="text-zinc-400 text-lg">
-          Distributed job processing &amp; workflow orchestration platform
-        </p>
-        <div className="pt-4 flex gap-3 justify-center">
-          <a
-            href="/api/v1/jobs"
-            className="inline-flex items-center gap-2 bg-white text-zinc-950 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-zinc-200 transition-colors"
-          >
-            View Jobs
-          </a>
-          <a
-            href="/api/v1/admin/stats/overview"
-            className="inline-flex items-center gap-2 bg-zinc-800 text-zinc-100 px-5 py-2.5 rounded-lg text-sm font-medium hover:bg-zinc-700 transition-colors border border-zinc-700"
-          >
-            Admin Dashboard
-          </a>
-        </div>
-      </div>
-    </div>
+    <Routes>
+      <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
+      <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
+      <Route path="/jobs" element={<ProtectedRoute><JobList /></ProtectedRoute>} />
+      <Route path="/jobs/new" element={<ProtectedRoute><CreateJob /></ProtectedRoute>} />
+      <Route path="/jobs/:id" element={<ProtectedRoute><JobDetail /></ProtectedRoute>} />
+      <Route path="/admin" element={<AdminRoute><AdminOverview /></AdminRoute>} />
+      <Route path="/admin/workers" element={<AdminRoute><Workers /></AdminRoute>} />
+      <Route path="/admin/dlq" element={<AdminRoute><Dlq /></AdminRoute>} />
+      <Route path="/admin/audit" element={<AdminRoute><AuditLog /></AdminRoute>} />
+      <Route path="/" element={<Navigate to="/jobs" replace />} />
+      <Route path="*" element={<Navigate to="/jobs" replace />} />
+    </Routes>
   )
 }
 
-export default App
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </BrowserRouter>
+  )
+}

@@ -4,6 +4,13 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+/**
+ * AI_CONTENT_GENERATION handler.
+ *
+ * <p><b>Idempotency warning:</b> This handler is NOT idempotent. A real implementation
+ * calling an LLM API would double-charge API credits on crash-retry. Production
+ * implementations must pass an idempotency key to the API provider.
+ */
 @Component
 public class AiContentGenerationHandler implements JobHandler<String, String> {
 

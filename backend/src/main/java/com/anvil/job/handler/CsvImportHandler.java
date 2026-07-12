@@ -6,6 +6,13 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+/**
+ * CSV_IMPORT handler.
+ *
+ * <p><b>Idempotency warning:</b> This handler is NOT idempotent. A real implementation
+ * inserting rows would duplicate data on crash-retry. Production implementations must
+ * use upserts, idempotency keys, or transactional batch boundaries to prevent duplicates.
+ */
 @Component
 public class CsvImportHandler implements JobHandler<String, String> {
 

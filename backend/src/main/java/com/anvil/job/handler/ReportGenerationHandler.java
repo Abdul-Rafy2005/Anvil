@@ -4,6 +4,12 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+/**
+ * REPORT_GENERATION handler.
+ *
+ * <p><b>Idempotency note:</b> Likely idempotent (read-only query + PDF render).
+ * Not idempotent if report generation triggers notifications or billing events.
+ */
 @Component
 public class ReportGenerationHandler implements JobHandler<String, String> {
 

@@ -6,6 +6,13 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+/**
+ * IMAGE_PROCESSING handler.
+ *
+ * <p><b>Idempotency note:</b> Naturally idempotent if output is written to a deterministic
+ * path (overwrites same file). Not idempotent if output path is random or if downstream
+ * systems are notified on completion.
+ */
 @Component
 public class ImageProcessingHandler implements JobHandler<String, String> {
 

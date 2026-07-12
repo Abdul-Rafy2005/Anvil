@@ -391,4 +391,51 @@ class WorkerIntegrationTest {
                     "CSV_IMPORT job should reach CANCELLED after cancel during execution");
         });
     }
+
+    @Test
+    @Order(16)
+    void reclaimOrphanedJobs_requeuesRunningJobNotInClaimedSet() {
+        for (JobPriority p : JobPriority.values()) {
+            while (queue.claim("drain-worker", 1).isPresent()) {}
+        }
+
+        Job job = new Job(testUserId, "AI_CONTENT_GENERATION", "{}", JobStatus.QUEUED);
+        job.setMaxRetries(2);
+        jobRepository.saveAndFlush(job);
+
+        queue.enqueue(job.getId(), JobPriority.MEDIUM);
+
+        jdbc.execute("UPDATE jobs SET status = 'RUNNING', started_at = '" + Instant.now()
+                + "', attempt_count = 1 WHERE id = '" + job.getId() + "'");
+
+        workerWatchdog.reclaimOrphanedJobs();
+
+        Job updated = jobRepository.findById(job.getId()).orElseThrow();
+        assertEquals(JobStatus.RETRYING, updated.getStatus(),
+                "Orphaned RUNNING job should be RETRYING (attempt 1 < max 2)");
+    }
+
+    @Test
+    @Order(17)
+    void reclaimOrphanedJobs_doesNotTouchClaimedJob() {
+        for (JobPriority p : JobPriority.values()) {
+            while (queue.claim("drain-worker", 1).isPresent()) {}
+        }
+
+        Job job = new Job(testUserId, "AI_CONTENT_GENERATION", "{}", JobStatus.QUEUED);
+        job.setMaxRetries(2);
+        jobRepository.saveAndFlush(job);
+
+        queue.enqueue(job.getId(), JobPriority.MEDIUM);
+        queue.claim("active-worker", 60);
+
+        jdbc.execute("UPDATE jobs SET status = 'RUNNING', started_at = '" + Instant.now()
+                + "', attempt_count = 1 WHERE id = '" + job.getId() + "'");
+
+        workerWatchdog.reclaimOrphanedJobs();
+
+        Job updated = jobRepository.findById(job.getId()).orElseThrow();
+        assertEquals(JobStatus.RUNNING, updated.getStatus(),
+                "Claimed RUNNING job should NOT be reclaimed");
+    }
 }

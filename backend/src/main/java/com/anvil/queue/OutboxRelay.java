@@ -3,6 +3,7 @@ package com.anvil.queue;
 import com.anvil.job.domain.JobPriority;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.slf4j.MDC;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -34,6 +35,7 @@ public class OutboxRelay {
     public void relay() {
         List<OutboxEntry> entries = outboxRepository.findRetryableEntries();
         for (OutboxEntry entry : entries) {
+            MDC.put("jobId", entry.getJobId().toString());
             try {
                 queue.enqueue(entry.getJobId(), entry.getPriority());
                 entry.setStatus(OutboxStatus.RELAYED);
@@ -55,6 +57,8 @@ public class OutboxRelay {
                             newRetryCount, MAX_RETRIES, delayMs, entry.getJobId(), e);
                 }
                 outboxRepository.save(entry);
+            } finally {
+                MDC.remove("jobId");
             }
         }
     }

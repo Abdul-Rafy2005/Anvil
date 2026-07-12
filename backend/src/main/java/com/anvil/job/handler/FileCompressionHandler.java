@@ -6,6 +6,12 @@ import org.springframework.stereotype.Component;
 
 import java.time.Duration;
 
+/**
+ * FILE_COMPRESSION handler.
+ *
+ * <p><b>Idempotency note:</b> Naturally idempotent if output overwrites the same archive.
+ * Not idempotent if output path includes timestamps or if downstream systems are notified.
+ */
 @Component
 public class FileCompressionHandler implements JobHandler<String, String> {
 
