@@ -25,6 +25,9 @@ public class User {
     @Column(name = "is_active", nullable = false)
     private boolean isActive = true;
 
+    @Column(name = "email_notifications_enabled", nullable = false)
+    private boolean emailNotificationsEnabled = true;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -50,5 +53,7 @@ public class User {
     public void setRole(Role role) { this.role = role; }
     public boolean isActive() { return isActive; }
     public void setActive(boolean active) { isActive = active; }
+    public boolean isEmailNotificationsEnabled() { return emailNotificationsEnabled; }
+    public void setEmailNotificationsEnabled(boolean emailNotificationsEnabled) { this.emailNotificationsEnabled = emailNotificationsEnabled; }
     public Instant getCreatedAt() { return createdAt; }
 }

@@ -73,3 +73,6 @@ watchdog:
 scheduler:
   retry-interval-ms: ${SCHEDULER_RETRY_INTERVAL_MS:5000}
   scheduled-scan-interval-ms: ${SCHEDULER_SCHEDULED_SCAN_INTERVAL_MS:5000}
+
+websocket:
+  allowed-origins: ${WEBSOCKET_ALLOWED_ORIGINS:*}

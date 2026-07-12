@@ -1,6 +1,7 @@
 package com.anvil.job.domain;
 
 import com.anvil.audit.AuditLogService;
+import com.anvil.notification.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -18,11 +19,14 @@ class JobStateMachineTest {
     @Mock
     private AuditLogService auditLogService;
 
+    @Mock
+    private NotificationService notificationService;
+
     private JobStateMachine stateMachine;
 
     @BeforeEach
     void setUp() {
-        stateMachine = new JobStateMachine(auditLogService);
+        stateMachine = new JobStateMachine(auditLogService, notificationService);
     }
 
     private Job jobWithStatus(JobStatus status) {

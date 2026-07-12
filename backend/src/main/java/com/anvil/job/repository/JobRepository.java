@@ -37,4 +37,25 @@ public interface JobRepository extends JpaRepository<Job, UUID> {
     @Query(value = "SELECT * FROM jobs WHERE status = 'CREATED' AND cron_expression IS NOT NULL AND next_fire_at IS NOT NULL AND next_fire_at <= :now LIMIT :limit FOR UPDATE SKIP LOCKED",
            nativeQuery = true)
     List<Job> findDueCronJobs(@Param("now") Instant now, @Param("limit") int limit);
+
+    long countByStatus(com.anvil.job.domain.JobStatus status);
+
+    long countByStatusIn(List<com.anvil.job.domain.JobStatus> statuses);
+
+    @Query("SELECT COUNT(j) FROM Job j WHERE j.status IN :statuses AND j.completedAt >= :since")
+    long countByStatusInAndCompletedAtSince(@Param("statuses") List<com.anvil.job.domain.JobStatus> statuses,
+                                            @Param("since") Instant since);
+
+    @Query(value = "SELECT job_type, AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) " +
+           "FROM jobs WHERE status = 'COMPLETED' AND started_at IS NOT NULL AND completed_at IS NOT NULL " +
+           "GROUP BY job_type", nativeQuery = true)
+    List<Object[]> averageProcessingTimePerJobType();
+
+    @Query(value = "SELECT AVG(EXTRACT(EPOCH FROM (completed_at - started_at))) " +
+           "FROM jobs WHERE status = 'COMPLETED' AND started_at IS NOT NULL AND completed_at IS NOT NULL",
+           nativeQuery = true)
+    Double averageProcessingTimeOverall();
+
+    @Query("SELECT COUNT(j) FROM Job j WHERE j.priority = :priority AND j.status IN ('QUEUED', 'CREATED')")
+    long countWaitingByPriority(@org.springframework.data.repository.query.Param("priority") com.anvil.job.domain.JobPriority priority);
 }

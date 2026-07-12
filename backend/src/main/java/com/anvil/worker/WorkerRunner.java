@@ -9,6 +9,7 @@ import com.anvil.queue.AnvilQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
@@ -31,6 +32,7 @@ public class WorkerRunner {
     private final WorkerRepository workerRepository;
     private final JobHandlerRegistry handlerRegistry;
     private final DeadLetterService deadLetterService;
+    private final SimpMessagingTemplate messagingTemplate;
     private final long[] retryBackoffSeconds;
 
     @Value("${worker.id:default}")
@@ -46,6 +48,7 @@ public class WorkerRunner {
                         WorkerRepository workerRepository,
                         JobHandlerRegistry handlerRegistry,
                         DeadLetterService deadLetterService,
+                        SimpMessagingTemplate messagingTemplate,
                         @Value("${worker.retry-backoff-seconds:30,60,120,240}") String retryBackoffCsv) {
         this.queue = queue;
         this.jobRepository = jobRepository;
@@ -54,6 +57,7 @@ public class WorkerRunner {
         this.workerRepository = workerRepository;
         this.handlerRegistry = handlerRegistry;
         this.deadLetterService = deadLetterService;
+        this.messagingTemplate = messagingTemplate;
         this.retryBackoffSeconds = parseBackoff(retryBackoffCsv);
     }
 
@@ -69,6 +73,12 @@ public class WorkerRunner {
     @Scheduled(fixedDelayString = "${worker.poll-interval-ms:2000}",
                initialDelayString = "${worker.poll-interval-ms:2000}")
     public void poll() {
+        Worker self = getOrCreateWorker();
+        if (self.getStatus() == WorkerStatus.PAUSED) {
+            log.debug("Worker {} is paused, skipping poll", workerId);
+            return;
+        }
+
         Optional<AnvilQueue.QueueClaim> claim = queue.claim(workerId, visibilityTimeoutSeconds);
         if (claim.isEmpty()) return;
 
@@ -99,7 +109,7 @@ public class WorkerRunner {
             return;
         }
 
-        Worker worker = getOrCreateWorker();
+        Worker worker = self;
         worker.setCurrentJobId(jobId);
         worker.setStatus(WorkerStatus.HEALTHY);
         workerRepository.save(worker);
@@ -124,7 +134,7 @@ public class WorkerRunner {
         log.info("Worker {} executing job={} type={} attempt={}", workerId, jobId, job.getJobType(), job.getAttemptCount());
 
         try {
-            JobExecutionContext ctx = new JobExecutionContextImpl(job, job.getAttemptCount(), jobRepository);
+            JobExecutionContext ctx = new JobExecutionContextImpl(job, job.getAttemptCount(), jobRepository, messagingTemplate);
             Object result = executeHandler(handler, job.getPayload(), ctx);
 
             if (job.getStatus() == JobStatus.CANCELLING || job.getStatus() == JobStatus.CANCELLED) {

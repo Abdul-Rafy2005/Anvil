@@ -1,21 +1,30 @@
 package com.anvil.job.domain;
 
 import com.anvil.audit.AuditLogService;
+import com.anvil.notification.NotificationService;
+import com.anvil.notification.NotificationType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.util.Set;
 import java.util.UUID;
 
 @Component
 public class JobStateMachine {
 
+    private static final Logger log = LoggerFactory.getLogger(JobStateMachine.class);
+
     private static final Set<JobStatus> CANCELLABLE_STATES =
             Set.of(JobStatus.CREATED, JobStatus.QUEUED, JobStatus.RUNNING);
 
     private final AuditLogService auditLogService;
+    private final NotificationService notificationService;
 
-    public JobStateMachine(AuditLogService auditLogService) {
+    public JobStateMachine(AuditLogService auditLogService, NotificationService notificationService) {
         this.auditLogService = auditLogService;
+        this.notificationService = notificationService;
     }
 
     public void transition(Job job, JobStatus newStatus, UUID actorUserId) {
@@ -28,15 +37,32 @@ public class JobStateMachine {
         job.setStatus(newStatus);
 
         if (newStatus == JobStatus.RUNNING && job.getStartedAt() == null) {
-            job.setStartedAt(java.time.Instant.now());
+            job.setStartedAt(Instant.now());
         }
         if (newStatus == JobStatus.COMPLETED || newStatus == JobStatus.CANCELLED
                 || newStatus == JobStatus.FAILED_PERMANENTLY) {
-            job.setCompletedAt(java.time.Instant.now());
+            job.setCompletedAt(Instant.now());
         }
 
         auditLogService.log(actorUserId, "STATUS_" + oldStatus + "_TO_" + newStatus,
                 "Job", job.getId(), metadata);
+
+        notificationService.pushStatusUpdate(job.getId(), newStatus.name(), job.getUserId(),
+                "Job status: " + newStatus);
+
+        if (newStatus == JobStatus.COMPLETED || newStatus == JobStatus.FAILED_PERMANENTLY
+                || newStatus == JobStatus.CANCELLED) {
+            NotificationType type = switch (newStatus) {
+                case COMPLETED -> NotificationType.JOB_COMPLETED;
+                case FAILED_PERMANENTLY -> NotificationType.JOB_FAILED_PERMANENTLY;
+                case CANCELLED -> NotificationType.JOB_CANCELLED;
+                default -> null;
+            };
+            if (type != null) {
+                notificationService.createNotification(job.getUserId(), job.getId(), type,
+                        "Job " + newStatus.name().toLowerCase().replace('_', ' '));
+            }
+        }
     }
 
     public boolean canCancel(JobStatus status) {
