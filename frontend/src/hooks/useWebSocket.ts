@@ -20,9 +20,7 @@ export function useJobWebSocket(jobId: string | null) {
     const token = api.getAccessToken()
     if (!jobId || !token) return
 
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const host = window.location.host
-    const url = `${protocol}//${host}/ws`
+    const url = `${window.location.protocol}//${window.location.host}/ws`
 
     const sockJsScript = document.querySelector('script[src*="sockjs"]')
     if (!sockJsScript) {

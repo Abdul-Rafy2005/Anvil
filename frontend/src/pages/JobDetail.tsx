@@ -16,6 +16,137 @@ function canCancel(status: string): boolean {
   return ['CREATED', 'QUEUED', 'RUNNING'].includes(status)
 }
 
+function tryParseJson(s: string): unknown | null {
+  try { return JSON.parse(s) } catch { return null }
+}
+
+function ResultDetail({ job }: { job: Job }) {
+  if (job.status !== 'COMPLETED' || !job.result) return null
+  const parsed = tryParseJson(job.result) as Record<string, unknown> | null
+  const jobType = job.jobType
+
+  if (parsed && jobType === 'AI_CONTENT_GENERATION') {
+    return (
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-medium text-zinc-400">Result</h3>
+        <div className="bg-zinc-950 rounded p-3 max-h-64 overflow-y-auto">
+          <p className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap">
+            {String(parsed.generatedText ?? job.result)}
+          </p>
+        </div>
+        <div className="flex gap-4 text-xs text-zinc-500">
+          {typeof parsed.model === 'string' && <span>Model: <span className="text-zinc-400">{parsed.model}</span></span>}
+          {typeof parsed.tokenCount === 'number' && (
+            <span>Tokens: <span className="text-zinc-400 tabular-nums">{parsed.tokenCount}</span></span>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  if (parsed && jobType === 'CSV_IMPORT') {
+    return (
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-medium text-zinc-400">Result</h3>
+        <div className="grid grid-cols-3 gap-3">
+          <StatTile label="Rows processed" value={String(parsed.rowsProcessed ?? 0)} />
+          <StatTile label="Errors" value={String(parsed.errors ?? 0)} error={Number(parsed.errors ?? 0) > 0} />
+          <StatTile label="Status" value={String(parsed.duration ?? 'completed')} />
+        </div>
+      </div>
+    )
+  }
+
+  if (parsed && jobType === 'EMAIL_CAMPAIGN') {
+    return (
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-medium text-zinc-400">Result</h3>
+        <div className="grid grid-cols-3 gap-3">
+          <StatTile label="Sent" value={String(parsed.sent ?? 0)} />
+          <StatTile label="Bounced" value={String(parsed.bounced ?? 0)} error={Number(parsed.bounced ?? 0) > 0} />
+          <StatTile label="Campaign ID" value={String(parsed.campaignId ?? '-').slice(0, 8)} mono />
+        </div>
+      </div>
+    )
+  }
+
+  if (parsed && jobType === 'FILE_COMPRESSION') {
+    return (
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-medium text-zinc-400">Result</h3>
+        <div className="grid grid-cols-3 gap-3">
+          <StatTile label="Original" value={String(parsed.originalSize ?? '-')} />
+          <StatTile label="Compressed" value={String(parsed.compressedSize ?? '-')} />
+          <StatTile label="Ratio" value={String(parsed.ratio ?? '-')} />
+        </div>
+        <button
+          disabled
+          className="w-full py-2 border border-zinc-800 rounded-lg text-sm text-zinc-500 bg-zinc-950 cursor-not-allowed"
+        >
+          Simulated download — {String(parsed.archiveUrl ?? 'archive')}
+        </button>
+      </div>
+    )
+  }
+
+  if (parsed && jobType === 'IMAGE_PROCESSING') {
+    return (
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-medium text-zinc-400">Result</h3>
+        <div className="grid grid-cols-3 gap-3">
+          <StatTile label="Images converted" value={String(parsed.convertedCount ?? 0)} />
+          <StatTile label="Output format" value={String(parsed.outputFormat ?? '-')} />
+          <StatTile label="Output dir" value={String(parsed.outputDir ?? '-')} mono />
+        </div>
+      </div>
+    )
+  }
+
+  if (parsed && jobType === 'REPORT_GENERATION') {
+    return (
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
+        <h3 className="text-sm font-medium text-zinc-400">Result</h3>
+        <div className="grid grid-cols-3 gap-3">
+          <StatTile label="Format" value={String(parsed.format ?? '-')} />
+          <StatTile label="Pages" value={String(parsed.pages ?? '-')} />
+          <StatTile label="Report" value={String(parsed.reportUrl ?? '-')} mono />
+        </div>
+        <button
+          disabled
+          className="w-full py-2 border border-zinc-800 rounded-lg text-sm text-zinc-500 bg-zinc-950 cursor-not-allowed"
+        >
+          Simulated download — {String(parsed.reportUrl ?? 'report')}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+      <h3 className="text-sm font-medium text-zinc-400 mb-2">Result</h3>
+      <pre className="text-xs text-zinc-300 font-mono whitespace-pre-wrap break-all bg-zinc-950 rounded p-3 overflow-x-auto max-h-48">
+        {job.result}
+      </pre>
+    </div>
+  )
+}
+
+function StatTile({ label, value, error, mono }: {
+  label: string
+  value: string
+  error?: boolean
+  mono?: boolean
+}) {
+  return (
+    <div className="bg-zinc-950 rounded-lg px-3 py-2.5">
+      <p className="text-xs text-zinc-500 mb-0.5">{label}</p>
+      <p className={`text-sm font-medium tabular-nums ${mono ? 'font-mono text-xs' : ''} ${error ? 'text-red-400' : 'text-zinc-200'}`}>
+        {value}
+      </p>
+    </div>
+  )
+}
+
 export function JobDetail() {
   const { id } = useParams<{ id: string }>()
   const navigate = useNavigate()
@@ -121,12 +252,7 @@ export function JobDetail() {
       )}
 
       {job.status === 'COMPLETED' && job.result && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-zinc-400 mb-2">Result</h3>
-          <pre className="text-xs text-zinc-300 font-mono whitespace-pre-wrap break-all bg-zinc-950 rounded p-3 overflow-x-auto max-h-48">
-            {job.result}
-          </pre>
-        </div>
+        <ResultDetail job={job} />
       )}
 
       {(job.status === 'FAILED' || job.status === 'FAILED_PERMANENTLY') && job.errorMessage && (
