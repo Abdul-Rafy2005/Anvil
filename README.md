@@ -2,9 +2,9 @@
 
 **Submit a job. Don't block the request. Get results when they're ready.**
 
-Anvil is a distributed job processing platform. Clients submit work (CSV imports, report generation, image processing, etc.) via a REST API and receive a job ID immediately. A worker pool picks up jobs asynchronously, executes them with automatic retries and backoff, and pushes real-time progress updates over WebSocket. Admins get operational visibility through stats, worker management, audit logs, and a dead letter queue.
+Anvil is a distributed job processing and workflow orchestration platform. Client apps submit work (report generation, image processing, CSV import, bulk email, AI content generation, file compression) via a REST API and get a job ID back immediately. A horizontally scalable worker pool picks jobs up asynchronously off a Redis-backed priority queue, executes them with automatic retries and backoff, and pushes real-time progress over WebSocket. Admins get full operational visibility through a stats dashboard, worker management, an audit log, and a dead letter queue.
 
-This is the backend and frontend implementation covering Phases 0-11 of the build. See [`docs/PRD.md`](docs/PRD.md) for the full product spec and [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the phased build approach.
+Anvil is job-type agnostic at its core — it doesn't know or care what "compress a video" means, it only knows how to accept, queue, schedule, execute, retry, and report on jobs. It is **not** a DAG/workflow engine (no Airflow-style multi-step pipelines in v1); each job is a single unit of work. See [`docs/PRD.md`](docs/PRD.md) for the full product spec and [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the phased build approach.
 
 ## Current Status
 
@@ -12,9 +12,9 @@ This is the backend and frontend implementation covering Phases 0-11 of the buil
 
 - Authentication and role-based access control (register, login, JWT refresh/logout, rate limiting)
 - Job CRUD with idempotency, cancellation, status tracking, and priority tiers (HIGH/MEDIUM/LOW)
-- Redis-backed priority queue with transactional outbox pattern
+- Redis-backed priority queue with transactional outbox pattern (DB write + queue enqueue as one atomic unit)
 - Worker pool with heartbeat monitoring, automatic reclamation of stalled jobs, and pause/resume
-- 7 job handlers (CSV Import, Email Campaign, File Compression, Image Processing, Report Generation, AI Content Generation, Always-Fail)
+- 7 job handlers (CSV Import, Email Campaign, File Compression, Image Processing, Report Generation, AI Content Generation, Always-Fail) behind a common `JobHandler` interface — new job types never require touching queue/scheduler/worker code
 - Automatic retry with exponential backoff and dead letter queue (requeue/discard)
 - Scheduled and cron-based job scheduling (cron-utils validated)
 - WebSocket notifications (STOMP over SockJS) with per-user authorization and job progress streaming
@@ -33,66 +33,60 @@ See [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) for the full ph
 
 ### System Overview
 
+The system splits cleanly into a **write path** (submit → queue → execute → persist) and a **read path** (dashboard queries + live push), which is why the diagram below draws them as two lanes converging on the same client.
+
 ```
-                            ┌─────────────────────────────────────────────────┐
-                            │                  Client (Browser)               │
-                            │   React SPA  ──── REST API ──── WebSocket      │
-                            └───────────┬─────────────────────┬───────────────┘
-                                        │                     │
-                              ┌─────────▼─────────┐   ┌──────▼──────────┐
-                              │   nginx (Docker)   │   │   STOMP/SockJS  │
-                              │   :80               │   │   connection    │
-                              └─────────┬──────────┘   └──────┬──────────┘
-                                        │                     │
-                          ┌─────────────▼─────────────────────▼─────────────┐
-                          │              Spring Boot Backend (:8080)        │
-                          │                                                 │
-                          │  ┌──────────┐  ┌──────────┐  ┌──────────────┐  │
-                          │  │ REST API │  │ WebSocket│  │  Scheduler   │  │
-                          │  │ (MVC)    │  │ (STOMP)  │  │ (cron/delay) │  │
-                          │  └────┬─────┘  └────┬─────┘  └──────┬───────┘  │
-                          │       │              │               │          │
-                          │       │              │               │          │
-                          │  ┌────▼──────────────▼───────────────▼───────┐  │
-                          │  │           JobStateMachine                  │  │
-                          │  │  CREATED → QUEUED → RUNNING → COMPLETED   │  │
-                          │  │              ↘ FAILED → RETRYING → QUEUED │  │
-                          │  │              ↘ FAILED_PERMANENTLY (DLQ)   │  │
-                          │  └────────────────────┬──────────────────────┘  │
-                          │                       │                         │
-                          │  ┌────────────────────▼──────────────────────┐  │
-                          │  │        Transactional Outbox Table         │  │
-                          │  │   (DB write + queue enqueue = atomic)     │  │
-                          │  └────────────────────┬──────────────────────┘  │
-                          │                       │                         │
-                          │  ┌────────────────────▼──────────────────────┐  │
-                          │  │          Outbox Relay (1s interval)       │  │
-                          │  │   Moves outbox entries → Redis sorted sets │  │
-                          │  └────────────────────┬──────────────────────┘  │
-                          │                       │                         │
-                          │  ┌────────────────────▼──────────────────────┐  │
-                          │  │            Worker (polls every 2s)        │  │
-                          │  │  claim → execute handler → ack/nack       │  │
-                          │  │  heartbeat → watchdog (15s interval)      │  │
-                          │  └────────────────────┬──────────────────────┘  │
-                          │                       │                         │
-                          │  ┌────────────────────▼──────────────────────┐  │
-                          │  │      Metrics + Logging + Health           │  │
-                          │  │  Micrometer/Prometheus, Logback JSON,     │  │
-                          │  │  CorrelationFilter, K8s liveness/readiness │  │
-                          │  └───────────────────────────────────────────┘  │
-                          └───────────┬─────────────────────┬───────────────┘
-                                      │                     │
-                    ┌─────────────────▼───┐     ┌───────────▼───────────┐
-                    │   PostgreSQL 16      │     │      Redis 7          │
-                    │   (Flyway managed)   │     │  Queue (sorted sets)  │
-                    │                      │     │  Heartbeats           │
-                    │  jobs, users,        │     │  Claimed set          │
-                    │  attempts, outbox,   │     │  Session cache        │
-                    │  audit_log,          │     │                       │
-                    │  notifications,      │     │                       │
-                    │  dead_letter_entries │     │                       │
-                    └──────────────────────┘     └───────────────────────┘
+┌───────────────────────┐
+│      Client App         │
+└──────────┬──────────────┘
+           │ POST /api/v1/jobs
+           ▼
+┌───────────────────────────────────────────┐
+│         Spring Boot REST API                │
+│              (Job API)                      │
+└──────────┬────────────────────────────────┘
+           │ BEGIN TX: INSERT job + INSERT outbox row (atomic)
+           ▼
+┌───────────────────────────────────────────┐
+│               PostgreSQL 16                  │
+│    jobs · users · attempts · outbox ·        │
+│    audit_log · notifications · dlq           │
+└──────────┬────────────────────────────────┘
+           │ OutboxRelay (1s poll) → ZADD
+           ▼
+┌───────────────────────────────────────────┐
+│      Redis 7 — Priority Queue (HIGH/MED/LOW) │
+└──────────┬────────────────────────────────┘
+           │ poll (2s) → claim
+           ▼
+┌───────────────────────────────────────────┐
+│               Worker Pool                    │
+│   claim → JobHandler.execute() → ack/nack    │
+│   heartbeat → watchdog (15s)                 │
+└───┬───────────────────┬───────────────────┬──┘
+    │ persist result/    │ report progress   │ on FAILED_PERMANENTLY
+    │ status transition  │                    │
+    ▼                    ▼                    ▼
+┌────────────┐   ┌───────────────────┐  ┌──────────────┐
+│ PostgreSQL │   │ WebSocket           │  │ Dead Letter   │
+│ (job row)  │   │ Notification Service│  │ Queue         │
+└────────────┘   └─────────┬──────────┘  └──────────────┘
+                            │
+┌───────────────────────────┼───────────────────────────┐
+│            Admin / User Dashboard API                    │
+│                            │                              │
+│   read jobs/audit/DLQ ─────┤    read live stats ──────┐   │
+│                            ▼                            ▼   │
+│                    ┌────────────┐               ┌────────────┐│
+│                    │ PostgreSQL │               │  Redis 7    ││
+│                    └────────────┘               └────────────┘│
+└──────────┬─────────────────────────────────────────────┬────┘
+           │ REST                                        │
+           ▼                                              ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    React Dashboard                             │
+│    (User workspace + Admin console, REST + live STOMP subscribe)│
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### Job Lifecycle — State Machine
@@ -599,6 +593,7 @@ Coverage includes:
 - **Chaos test scope:** The chaos test validates single-instance crash recovery (entire backend killed + restarted). It does not exercise multi-instance fault tolerance where a surviving worker recovers a dead worker's orphaned job. The architecture supports this via `reclaimOrphanedJobs()` + Redis claimed-set checks, but it is not empirically validated.
 - **Submission vs execution throughput:** The load test measures API submission throughput (HTTP accept rate), not end-to-end execution throughput (submission → queue → worker → completion). Actual execution throughput is limited by worker poll interval and handler duration.
 - **Progress-to-completion gap:** The frontend shows 100% progress ~3 seconds before the status transitions to COMPLETED. This is a timing nuance — the handler reports progress=100% during its final iteration, but the state machine transition happens after the handler returns. The result section is correctly gated on `status=COMPLETED`, not `progressPct=100`, so no data is shown prematurely.
+- **No multi-step workflows (by design, v1):** Anvil is not a DAG/workflow engine. Each job is a single unit of work; job-A-triggers-job-B pipelines are documented future roadmap, not current scope.
 
 ---
 
